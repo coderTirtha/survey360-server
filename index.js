@@ -36,6 +36,17 @@ const verifyToken = (req, res, next) => {
   });
 }
 
+const verifyAdmin = async (req, res, next) => {
+  const email = req.user.email;
+  const query = { email: email }
+  const user = await usersCollection.findOne(query);
+  const isAdmin = user?.role === 'admin';
+  if (!isAdmin) {
+    return res.status(403).send({ message: "Forbidden Access" });
+  }
+  next();
+}
+
 // Create a MongoClient with a MongoClientOptions object to set the Stable API version
 const client = new MongoClient(uri, {
   serverApi: {
@@ -49,7 +60,9 @@ async function run() {
   try {
     // Connect the client to the server	(optional starting in v4.7)
     // await client.connect();
-
+    const categoryCollection = client.db('survey360').collection('category');
+    const surveyCollection = client.db('survey360').collection('surveys');
+    const userCollection = client.db('survey360').collection('users');
     // Authentication related APIs
     app.post('/jwt', async (req, res) => {
       const user = req.body;
@@ -65,6 +78,38 @@ async function run() {
       console.log(user);
       res.clearCookie('token', { maxAge: 0 }).send({ success: true });
     });
+    // data related APIs
+    app.get('/categories', async (req, res) => {
+      const result = await categoryCollection.find().toArray();
+      res.send(result);
+    });
+    app.get('/users/admin/:email', verifyToken, async (req, res) => {
+      const email = req.params.email;
+      if (email !== req.user.email) {
+        return res.status(403).send({ message: "Forbidden Access" });
+      }
+      const query = { email: email }
+      const user = await userCollection.findOne(query);
+      let admin = false;
+      if (user) {
+        admin = user?.role === 'admin';
+      }
+      res.send({ admin });
+    })
+    app.post('/surveys/:email', verifyToken, async (req, res) => {
+      const email = req.params.email;
+      if (email !== req.user.email) {
+        return res.status(403).send({ message: "Forbidden access" });
+      }
+      const survey = req.body;
+      const result = await surveyCollection.insertOne(survey);
+      res.send(result);
+    });
+    app.post('/users', async (req, res) => {
+      const user = req.body;
+      const result = await userCollection.insertOne(user);
+      res.send(result);
+    })
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
     console.log("Pinged your deployment. You successfully connected to MongoDB!");
