@@ -1,7 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const jwt = require('jsonwebtoken');
-const { MongoClient, ServerApiVersion } = require('mongodb');
+const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 const cookieParser = require('cookie-parser');
 require('dotenv').config();
 const app = express();
@@ -19,33 +19,7 @@ app.use(cookieParser());
 
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.mpu9aqk.mongodb.net/?retryWrites=true&w=majority`;
 
-const verifyToken = (req, res, next) => {
-  const token = req.cookies?.token;
-  // console.log(token);
-  if (!token) {
-    return res.status(401).send({ message: "Not Authorized" })
-  }
-  jwt.verify(token, process.env.ACCESS_WEB_TOKEN, (err, decoded) => {
-    if (err) {
-      console.log(err);
-      return res.status(401).send("Unauthorized");
-    }
-    // console.log('Value in the token', decoded);
-    req.user = decoded;
-    next();
-  });
-}
 
-const verifyAdmin = async (req, res, next) => {
-  const email = req.user.email;
-  const query = { email: email }
-  const user = await usersCollection.findOne(query);
-  const isAdmin = user?.role === 'admin';
-  if (!isAdmin) {
-    return res.status(403).send({ message: "Forbidden Access" });
-  }
-  next();
-}
 
 // Create a MongoClient with a MongoClientOptions object to set the Stable API version
 const client = new MongoClient(uri, {
@@ -63,6 +37,44 @@ async function run() {
     const categoryCollection = client.db('survey360').collection('category');
     const surveyCollection = client.db('survey360').collection('surveys');
     const userCollection = client.db('survey360').collection('users');
+    // Middlewares
+    const verifyToken = (req, res, next) => {
+      const token = req.cookies?.token;
+      // console.log(token);
+      if (!token) {
+        return res.status(401).send({ message: "Not Authorized" })
+      }
+      jwt.verify(token, process.env.ACCESS_WEB_TOKEN, (err, decoded) => {
+        if (err) {
+          console.log(err);
+          return res.status(401).send("Unauthorized");
+        }
+        // console.log('Value in the token', decoded);
+        req.user = decoded;
+        next();
+      });
+    }
+
+    const verifyAdmin = async (req, res, next) => {
+      const email = req.user.email;
+      const query = { email: email }
+      const user = await userCollection.findOne(query);
+      const isAdmin = user?.role === 'admin';
+      if (!isAdmin) {
+        return res.status(403).send({ message: "Forbidden Access" });
+      }
+      next();
+    }
+    const verifySurveyor = async (req, res, next) => {
+      const email = req.user.email;
+      const query = { email: email }
+      const user = await userCollection.findOne(query);
+      const isSurveyor = user?.role === 'surveyor';
+      if (!isSurveyor) {
+        return res.status(403).send({ message: "Forbidden Access" });
+      }
+      next();
+    }
     // Authentication related APIs
     app.post('/jwt', async (req, res) => {
       const user = req.body;
@@ -95,12 +107,41 @@ async function run() {
         admin = user?.role === 'admin';
       }
       res.send({ admin });
-    })
-    app.post('/surveys/:email', verifyToken, async (req, res) => {
+    });
+    app.get('/users/surveyor/:email', verifyToken, async (req, res) => {
       const email = req.params.email;
       if (email !== req.user.email) {
-        return res.status(403).send({ message: "Forbidden access" });
+        return res.status(403).send({ message: "Forbidden Access" });
       }
+      const query = { email: email }
+      const user = await userCollection.findOne(query);
+      let surveyor = false;
+      if (user) {
+        surveyor = user?.role === 'surveyor';
+      }
+      res.send({ surveyor });
+    });
+    app.get('/surveys', async (req, res) => {
+      const result = await surveyCollection.find().toArray();
+      res.send(result);
+    });
+    app.get('/users', verifyToken, verifyAdmin, async(req, res) => {
+      const result = await userCollection.find().toArray();
+      res.send(result);
+    });
+    app.patch('/users/:id', verifyToken, verifyAdmin, async(req, res) => {
+      const id = req.params.id;
+      const assignedRole = req.body;
+      const filter = {_id: new ObjectId(id)}
+      const updated = {
+        $set : {
+          role: assignedRole.role
+        }
+      }
+      const result = await userCollection.updateOne(filter, updated);
+      res.send(result);
+    })
+    app.post('/surveys', verifyToken, verifySurveyor, async (req, res) => {
       const survey = req.body;
       const result = await surveyCollection.insertOne(survey);
       res.send(result);
@@ -108,6 +149,18 @@ async function run() {
     app.post('/users', async (req, res) => {
       const user = req.body;
       const result = await userCollection.insertOne(user);
+      res.send(result);
+    });
+    app.patch('/surveys/:id', verifyToken, verifyAdmin, async (req, res) => {
+      const id = req.params.id;
+      const updatedStatus = req.body;
+      const filter = { _id: new ObjectId(id) }
+      const updated = {
+        $set: {
+          status: updatedStatus.status
+        }
+      }
+      const result = await surveyCollection.updateOne(filter, updated);
       res.send(result);
     })
     // Send a ping to confirm a successful connection
