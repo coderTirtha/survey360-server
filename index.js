@@ -1,6 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const jwt = require('jsonwebtoken');
+const SSLCommerzPayment = require('sslcommerz-lts');
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 const cookieParser = require('cookie-parser');
 require('dotenv').config();
@@ -30,6 +31,10 @@ const client = new MongoClient(uri, {
   }
 });
 
+const store_id = process.env.STORE_ID;
+const store_passwd = process.env.STORE_PASSWD;
+const is_live = false;
+
 async function run() {
   try {
     // Connect the client to the server	(optional starting in v4.7)
@@ -37,6 +42,8 @@ async function run() {
     const categoryCollection = client.db('survey360').collection('category');
     const surveyCollection = client.db('survey360').collection('surveys');
     const userCollection = client.db('survey360').collection('users');
+    const pricingCollection = client.db('survey360').collection('pricing');
+    const paymentCollection = client.db('survey360').collection('payments');
     // Middlewares
     const verifyToken = (req, res, next) => {
       const token = req.cookies?.token;
@@ -75,6 +82,83 @@ async function run() {
       }
       next();
     }
+    // Payment related APIs
+    const transactionId = new ObjectId().toString();
+    app.post('/payment', verifyToken, async (req, res) => {
+      const invoiceData = req.body;
+      const userValidationQuery = {email: invoiceData?.email}
+      const isAdminOrSurveyorOrPro = await userCollection.findOne(userValidationQuery);
+      if(isAdminOrSurveyorOrPro?.role === "admin" || isAdminOrSurveyorOrPro?.role === "surveyor") {
+        return res.send({message: "Forbidden Access! Can't perform this action as executive panel"});
+      } else if(isAdminOrSurveyorOrPro?.role === "pro") {
+        return res.send({message: "You are already a pro user! No need to buy subscription!"});
+      }
+      const productId = req.body.productId;
+      const query = {_id : new ObjectId(productId)}
+      const product = await pricingCollection.findOne(query);
+      const data = {
+        total_amount: product?.price,
+        currency: invoiceData?.currency,
+        tran_id: transactionId, // use unique tran_id for each api call
+        success_url: `http://localhost:5000/payment/success/${transactionId}`,
+        fail_url: 'http://localhost:3030/fail',
+        cancel_url: 'http://localhost:3030/cancel',
+        ipn_url: 'http://localhost:3030/ipn',
+        shipping_method: 'Courier',
+        product_name: product?.name,
+        product_category: "subscription",
+        product_profile: 'general',
+        cus_name: invoiceData?.customerName,
+        cus_email: invoiceData?.email,
+        cus_add1: invoiceData?.address,
+        cus_add2: 'Dhaka',
+        cus_city: 'Dhaka',
+        cus_state: 'Dhaka',
+        cus_postcode: '1000',
+        cus_country: 'Bangladesh',
+        cus_phone: invoiceData?.phone,
+        cus_fax: '01711111111',
+        ship_name: 'Customer Name',
+        ship_add1: 'Dhaka',
+        ship_add2: 'Dhaka',
+        ship_city: 'Dhaka',
+        ship_state: 'Dhaka',
+        ship_postcode: 1000,
+        ship_country: 'Bangladesh',
+      };
+      console.log(data);
+      const sslcz = new SSLCommerzPayment(store_id, store_passwd, is_live)
+      sslcz.init(data).then(apiResponse => {
+        // Redirect the user to payment gateway
+        let GatewayPageURL = apiResponse.GatewayPageURL
+        const finalInvoice = {
+          product,
+          paidStatus: false,
+          email: invoiceData?.email,
+          transactionId
+        }
+        const result = paymentCollection.insertOne(finalInvoice)
+        res.send({ url: GatewayPageURL});
+        console.log('Redirecting to: ', GatewayPageURL)
+      });
+      app.post('/payment/success/:trans_id', async(req, res) => {
+        const query = {transactionId: req.params.trans_id}
+        const updated = {
+          $set: {
+            paidStatus: true,
+          }
+        }
+        const paymentSuccess = await paymentCollection.updateOne(query, updated);
+        const userUpdateSuccess = await userCollection.updateOne({email: invoiceData?.email}, {
+          $set: {
+            role: "pro",
+          }
+        });
+        if(paymentSuccess.modifiedCount > 0 && userUpdateSuccess.modifiedCount > 0) {
+          res.redirect(`http://localhost:5173/payment/success/${transactionId}`);
+        }
+      })
+    })
     // Authentication related APIs
     app.post('/jwt', async (req, res) => {
       const user = req.body;
@@ -91,6 +175,16 @@ async function run() {
       res.clearCookie('token', { maxAge: 0 }).send({ success: true });
     });
     // data related APIs
+    app.get('/pricing', async(req, res) => {
+      const result = await pricingCollection.find().toArray();
+      res.send(result);
+    });
+    app.get('/pricing/:id', verifyToken, async(req, res) => {
+      const id = req.params.id;
+      const query = {_id : new ObjectId(id)}
+      const result = await pricingCollection.findOne(query);
+      res.send(result);
+    })
     app.get('/categories', async (req, res) => {
       const result = await categoryCollection.find().toArray();
       res.send(result);
@@ -125,16 +219,16 @@ async function run() {
       const result = await surveyCollection.find().toArray();
       res.send(result);
     });
-    app.get('/users', verifyToken, verifyAdmin, async(req, res) => {
+    app.get('/users', verifyToken, verifyAdmin, async (req, res) => {
       const result = await userCollection.find().toArray();
       res.send(result);
     });
-    app.patch('/users/:id', verifyToken, verifyAdmin, async(req, res) => {
+    app.patch('/users/:id', verifyToken, verifyAdmin, async (req, res) => {
       const id = req.params.id;
       const assignedRole = req.body;
-      const filter = {_id: new ObjectId(id)}
+      const filter = { _id: new ObjectId(id) }
       const updated = {
-        $set : {
+        $set: {
           role: assignedRole.role
         }
       }
