@@ -44,6 +44,7 @@ async function run() {
     const userCollection = client.db('survey360').collection('users');
     const pricingCollection = client.db('survey360').collection('pricing');
     const paymentCollection = client.db('survey360').collection('payments');
+    const voteCollection = client.db('survey360').collection('votes');
     // Middlewares
     const verifyToken = (req, res, next) => {
       const token = req.cookies?.token;
@@ -86,15 +87,15 @@ async function run() {
     const transactionId = new ObjectId().toString();
     app.post('/payment', verifyToken, async (req, res) => {
       const invoiceData = req.body;
-      const userValidationQuery = {email: invoiceData?.email}
+      const userValidationQuery = { email: invoiceData?.email }
       const isAdminOrSurveyorOrPro = await userCollection.findOne(userValidationQuery);
-      if(isAdminOrSurveyorOrPro?.role === "admin" || isAdminOrSurveyorOrPro?.role === "surveyor") {
-        return res.send({message: "Forbidden Access! Can't perform this action as executive panel"});
-      } else if(isAdminOrSurveyorOrPro?.role === "pro") {
-        return res.send({message: "You are already a pro user! No need to buy subscription!"});
+      if (isAdminOrSurveyorOrPro?.role === "admin" || isAdminOrSurveyorOrPro?.role === "surveyor") {
+        return res.send({ message: "Forbidden Access! Can't perform this action as executive panel" });
+      } else if (isAdminOrSurveyorOrPro?.role === "pro") {
+        return res.send({ message: "You are already a pro user! No need to buy subscription!" });
       }
       const productId = req.body.productId;
-      const query = {_id : new ObjectId(productId)}
+      const query = { _id: new ObjectId(productId) }
       const product = await pricingCollection.findOne(query);
       const data = {
         total_amount: product?.price,
@@ -126,7 +127,7 @@ async function run() {
         ship_postcode: 1000,
         ship_country: 'Bangladesh',
       };
-      console.log(data);
+      // console.log(data);
       const sslcz = new SSLCommerzPayment(store_id, store_passwd, is_live)
       sslcz.init(data).then(apiResponse => {
         // Redirect the user to payment gateway
@@ -138,23 +139,23 @@ async function run() {
           transactionId
         }
         const result = paymentCollection.insertOne(finalInvoice)
-        res.send({ url: GatewayPageURL});
-        console.log('Redirecting to: ', GatewayPageURL)
+        res.send({ url: GatewayPageURL });
+        // console.log('Redirecting to: ', GatewayPageURL)
       });
-      app.post('/payment/success/:trans_id', async(req, res) => {
-        const query = {transactionId: req.params.trans_id}
+      app.post('/payment/success/:trans_id', async (req, res) => {
+        const query = { transactionId: req.params.trans_id }
         const updated = {
           $set: {
             paidStatus: true,
           }
         }
         const paymentSuccess = await paymentCollection.updateOne(query, updated);
-        const userUpdateSuccess = await userCollection.updateOne({email: invoiceData?.email}, {
+        const userUpdateSuccess = await userCollection.updateOne({ email: invoiceData?.email }, {
           $set: {
             role: "pro",
           }
         });
-        if(paymentSuccess.modifiedCount > 0 && userUpdateSuccess.modifiedCount > 0) {
+        if (paymentSuccess.modifiedCount > 0 && userUpdateSuccess.modifiedCount > 0) {
           res.redirect(`http://localhost:5173/payment/success/${transactionId}`);
         }
       })
@@ -175,16 +176,16 @@ async function run() {
       res.clearCookie('token', { maxAge: 0 }).send({ success: true });
     });
     // data related APIs
-    app.get('/pricing', async(req, res) => {
+    app.get('/pricing', async (req, res) => {
       const result = await pricingCollection.find().toArray();
       res.send(result);
     });
-    app.get('/pricing/:id', verifyToken, async(req, res) => {
+    app.get('/pricing/:id', verifyToken, async (req, res) => {
       const id = req.params.id;
-      const query = {_id : new ObjectId(id)}
+      const query = { _id: new ObjectId(id) }
       const result = await pricingCollection.findOne(query);
       res.send(result);
-    })
+    });
     app.get('/categories', async (req, res) => {
       const result = await categoryCollection.find().toArray();
       res.send(result);
@@ -215,14 +216,45 @@ async function run() {
       }
       res.send({ surveyor });
     });
-    app.get('/surveys', async (req, res) => {
+    app.get('/users/role/:email', verifyToken, async (req, res) => {
+      const email = req.params.email;
+      if (email !== req.user.email) {
+        return res.status(403).send({ message: "Forbidden Access" });
+      }
+      const query = { email: email }
+      const user = await userCollection.findOne(query);
+      res.send({ role: user.role });
+    })
+    app.get('/surveys', verifyToken, verifyAdmin, async (req, res) => {
       const result = await surveyCollection.find().toArray();
       res.send(result);
     });
+    app.get('/surveys/pending', verifyToken, verifySurveyor, async (req, res) => {
+      const query = { status: "pending" }
+      const result = await surveyCollection.find(query).toArray();
+      res.send(result);
+    })
+    app.get('/surveys/approved', async (req, res) => {
+      const query = { status: "approve" }
+      const result = await surveyCollection.find(query).toArray();
+      res.send(result);
+    });
+    app.get('/surveys/:id', async (req, res) => {
+      const id = req.params.id;
+      const query = { _id: new ObjectId(id) }
+      const result = await surveyCollection.findOne(query);
+      res.send(result);
+    })
     app.get('/users', verifyToken, verifyAdmin, async (req, res) => {
       const result = await userCollection.find().toArray();
       res.send(result);
     });
+    app.get('/user/role/:email', verifyToken, async (req, res) => {
+      const email = req.params.email;
+      const query = { email: email }
+      const result = await userCollection.findOne(query);
+      res.send(result);
+    })
     app.patch('/users/:id', verifyToken, verifyAdmin, async (req, res) => {
       const id = req.params.id;
       const assignedRole = req.body;
@@ -255,6 +287,52 @@ async function run() {
         }
       }
       const result = await surveyCollection.updateOne(filter, updated);
+      res.send(result);
+    });
+    app.put('/survey/vote/:id', verifyToken, async (req, res) => {
+      const correspondingId = req.params.id;
+      const vote = req.body;
+      const query = { _id: new ObjectId(correspondingId) }
+      const updatedYesDoc = {
+        $addToSet: {
+          yes: vote.voterEmail
+        }
+      }
+      const updatedNoDoc = {
+        $addToSet: {
+          no: vote.voterEmail
+        }
+      }
+      let updatedDoc = vote.vote === "yes" ? updatedYesDoc : updatedNoDoc;
+      const result = await surveyCollection.updateOne(query, updatedDoc);
+      res.send(result);
+    });
+    app.put('/survey/like/:id', verifyToken, async (req, res) => {
+      const correspondingId = req.params.id;
+      const likerEmail = req.body;
+      const query = { _id: new ObjectId(correspondingId) }
+      const updatedDoc = {
+        $addToSet: {
+          likes: likerEmail.email
+        }
+      }
+      const result = await surveyCollection.updateOne(query, updatedDoc);
+      res.send(result);
+    });
+    app.put('/surveys/:id', verifyToken, async (req, res) => {
+      const id = req.params.id;
+      const newComment = req.body;
+      const query = { _id: new ObjectId(id) }
+      const updatedDoc = {
+        $push: {
+          comments: {
+            email: newComment.email,
+            comment: newComment.comment,
+            name: newComment.name
+          }
+        }
+      }
+      const result = await surveyCollection.updateOne(query, updatedDoc);
       res.send(result);
     })
     // Send a ping to confirm a successful connection
