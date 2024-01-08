@@ -10,7 +10,9 @@ const port = 5000 || process.env.PORT;
 
 app.use(cors({
   origin: [
-    'http://localhost:5173'
+    'http://localhost:5173',
+    'https://survey360-portal.web.app/',
+    'https://survey360-portal.firebaseapp.com/'
   ],
   credentials: true
 }))
