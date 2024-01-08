@@ -44,7 +44,8 @@ async function run() {
     const userCollection = client.db('survey360').collection('users');
     const pricingCollection = client.db('survey360').collection('pricing');
     const paymentCollection = client.db('survey360').collection('payments');
-    const voteCollection = client.db('survey360').collection('votes');
+    const testimonialsCollection = client.db('survey360').collection('testimonials');
+    const faqCollection = client.db('survey360').collection('faq');
     // Middlewares
     const verifyToken = (req, res, next) => {
       const token = req.cookies?.token;
@@ -229,8 +230,8 @@ async function run() {
       const result = await surveyCollection.find().toArray();
       res.send(result);
     });
-    app.get('/surveys/pending', verifyToken, verifySurveyor, async (req, res) => {
-      const query = { status: "pending" }
+    app.get('/surveys/pending/:email', verifyToken, verifySurveyor, async (req, res) => {
+      const query = { status: "pending", email: req.params.email }
       const result = await surveyCollection.find(query).toArray();
       res.send(result);
     })
@@ -254,7 +255,19 @@ async function run() {
       const query = { email: email }
       const result = await userCollection.findOne(query);
       res.send(result);
+    });
+    app.get('/survey/recent', async(req, res) => {
+      const latestSurveys = await surveyCollection.find({status: "approve"}).sort({timestamp: -1}).limit(6).toArray();
+      res.send(latestSurveys);
     })
+    app.get('/testimonials', async(req, res) => {
+      const result = await testimonialsCollection.find().toArray();
+      res.send(result);
+    });
+    app.get('/faq', async(req, res) => {
+      const result = await faqCollection.find().toArray();
+      res.send(result);
+    });
     app.patch('/users/:id', verifyToken, verifyAdmin, async (req, res) => {
       const id = req.params.id;
       const assignedRole = req.body;
