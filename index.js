@@ -268,6 +268,10 @@ async function run() {
       const result = await faqCollection.find().toArray();
       res.send(result);
     });
+    app.get('/payments', verifyToken, verifyAdmin, async(req, res) => {
+      const result = await paymentCollection.find().toArray();
+      res.send(result);
+    })
     app.patch('/users/:id', verifyToken, verifyAdmin, async (req, res) => {
       const id = req.params.id;
       const assignedRole = req.body;
